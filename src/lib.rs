@@ -43,8 +43,6 @@ pub struct SmolStr(Repr);
 impl SmolStr {
     #[deprecated = "Use `new_inline` instead"]
     pub const fn new_inline_from_ascii(len: usize, bytes: &[u8]) -> SmolStr {
-        let _len_is_short = [(); INLINE_CAP + 1][len];
-
         const ZEROS: &[u8] = &[0; INLINE_CAP];
 
         let mut buf = [0; INLINE_CAP];
@@ -260,7 +258,7 @@ where
             heap.extend(iter);
             return SmolStr(Repr::Heap(heap.into_boxed_str().into()));
         }
-        (&mut buf[len..][..size]).copy_from_slice(slice.as_bytes());
+        buf[len..][..size].copy_from_slice(slice.as_bytes());
         len += size;
     }
     SmolStr(Repr::Inline {
@@ -388,7 +386,7 @@ impl Repr {
     #[inline]
     fn as_str(&self) -> &str {
         match self {
-            Repr::Heap(data) => &*data,
+            Repr::Heap(data) => data,
             Repr::Inline { len, buf } => {
                 let len = *len as usize;
                 let buf = &buf[..len];
@@ -566,7 +564,7 @@ mod postgres {
 #[cfg(feature = "sqlx-postgres")]
 mod sqlx {
 
-    use ::sqlx::{Database, Encode, Postgres, Type};
+    use ::sqlx::{database::HasValueRef, Database, Decode, Encode, Postgres, Type};
 
     use super::*;
 
@@ -582,6 +580,25 @@ mod sqlx {
             buf: &mut <Postgres as ::sqlx::database::HasArguments<'q>>::ArgumentBuffer,
         ) -> ::sqlx::encode::IsNull {
             <&str as sqlx::Encode<sqlx::Postgres>>::encode(self.as_str(), buf)
+        }
+    }
+
+    impl<'r> Decode<'r, Postgres> for SmolStr
+    where
+        // we want to delegate some of the work to string decoding so let's make sure strings
+        // are supported by the database
+        &'r str: Decode<'r, Postgres>,
+    {
+        fn decode(
+            value: <Postgres as HasValueRef<'r>>::ValueRef,
+        ) -> Result<SmolStr, Box<dyn std::error::Error + 'static + Send + Sync>> {
+            // the interface of ValueRef is largely unstable at the moment
+            // so this is not directly implementable
+            // however, you can delegate to a type that matches the format of the type you want
+            // to decode (such as a UTF-8 string)
+            let value = <&str as Decode<Postgres>>::decode(value)?;
+            // now you can parse this into your type (assuming there is a `FromStr`)
+            Ok(SmolStr::new(value))
         }
     }
 }
